@@ -60,7 +60,6 @@ from langgraph.constants import (
     NS_SEP,
     NULL_TASK_ID,
     PUSH,
-    SCHEDULED,
     TASKS,
 )
 from langgraph.errors import (
@@ -590,8 +589,6 @@ class Pregel(PregelProtocol[StateT, InputT, OutputT], Generic[StateT, InputT, Ou
 
     config_type: type[Any] | None = None
 
-    input_model: type[BaseModel] | None = None
-
     config: RunnableConfig | None = None
 
     name: str = "LangGraph"
@@ -619,7 +616,6 @@ class Pregel(PregelProtocol[StateT, InputT, OutputT], Generic[StateT, InputT, Ou
         retry_policy: RetryPolicy | Sequence[RetryPolicy] = (),
         cache_policy: CachePolicy | None = None,
         config_type: type[Any] | None = None,
-        input_model: type[BaseModel] | None = None,
         config: RunnableConfig | None = None,
         trigger_to_nodes: Mapping[str, Sequence[str]] | None = None,
         name: str = "LangGraph",
@@ -651,7 +647,6 @@ class Pregel(PregelProtocol[StateT, InputT, OutputT], Generic[StateT, InputT, Ou
         )
         self.cache_policy = cache_policy
         self.config_type = config_type
-        self.input_model = input_model
         self.config = config
         self.trigger_to_nodes = trigger_to_nodes or {}
         self.name = name
@@ -750,6 +745,7 @@ class Pregel(PregelProtocol[StateT, InputT, OutputT], Generic[StateT, InputT, Ou
         validate_graph(
             self.nodes,
             {k: v for k, v in self.channels.items() if isinstance(v, BaseChannel)},
+            {k: v for k, v in self.channels.items() if not isinstance(v, BaseChannel)},
             self.input_channels,
             self.output_channels,
             self.stream_channels,
@@ -788,8 +784,6 @@ class Pregel(PregelProtocol[StateT, InputT, OutputT], Generic[StateT, InputT, Ou
                 return channel.UpdateType
 
     def get_input_schema(self, config: RunnableConfig | None = None) -> type[BaseModel]:
-        if self.input_model is not None:
-            return self.input_model
         config = merge_configs(self.config, config)
         if isinstance(self.input_channels, str):
             return super().get_input_schema(config)
@@ -1008,7 +1002,7 @@ class Pregel(PregelProtocol[StateT, InputT, OutputT], Generic[StateT, InputT, Ou
             )
         if apply_pending_writes and saved.pending_writes:
             for tid, k, v in saved.pending_writes:
-                if k in (ERROR, INTERRUPT, SCHEDULED):
+                if k in (ERROR, INTERRUPT):
                     continue
                 if tid not in next_tasks:
                     continue
@@ -1127,7 +1121,7 @@ class Pregel(PregelProtocol[StateT, InputT, OutputT], Generic[StateT, InputT, Ou
             )
         if apply_pending_writes and saved.pending_writes:
             for tid, k, v in saved.pending_writes:
-                if k in (ERROR, INTERRUPT, SCHEDULED):
+                if k in (ERROR, INTERRUPT):
                     continue
                 if tid not in next_tasks:
                     continue
@@ -1466,7 +1460,7 @@ class Pregel(PregelProtocol[StateT, InputT, OutputT], Generic[StateT, InputT, Ou
                         )
                     # apply writes from tasks that already ran
                     for tid, k, v in saved.pending_writes or []:
-                        if k in (ERROR, INTERRUPT, SCHEDULED):
+                        if k in (ERROR, INTERRUPT):
                             continue
                         if tid not in next_tasks:
                             continue
@@ -1630,7 +1624,7 @@ class Pregel(PregelProtocol[StateT, InputT, OutputT], Generic[StateT, InputT, Ou
                     )
                 # apply writes
                 for tid, k, v in saved.pending_writes:
-                    if k in (ERROR, INTERRUPT, SCHEDULED):
+                    if k in (ERROR, INTERRUPT):
                         continue
                     if tid not in next_tasks:
                         continue
@@ -1886,7 +1880,7 @@ class Pregel(PregelProtocol[StateT, InputT, OutputT], Generic[StateT, InputT, Ou
                         )
                     # apply writes from tasks that already ran
                     for tid, k, v in saved.pending_writes or []:
-                        if k in (ERROR, INTERRUPT, SCHEDULED):
+                        if k in (ERROR, INTERRUPT):
                             continue
                         if tid not in next_tasks:
                             continue
@@ -2049,7 +2043,7 @@ class Pregel(PregelProtocol[StateT, InputT, OutputT], Generic[StateT, InputT, Ou
                         self.trigger_to_nodes,
                     )
                 for tid, k, v in saved.pending_writes:
-                    if k in (ERROR, INTERRUPT, SCHEDULED):
+                    if k in (ERROR, INTERRUPT):
                         continue
                     if tid not in next_tasks:
                         continue
@@ -2404,7 +2398,6 @@ class Pregel(PregelProtocol[StateT, InputT, OutputT], Generic[StateT, InputT, Ou
                 config[CONF][CONFIG_KEY_CHECKPOINT_DURING] = checkpoint_during
             with SyncPregelLoop(
                 input,
-                input_model=self.input_model,
                 stream=StreamProtocol(stream.put, stream_modes),
                 config=config,
                 store=store,
@@ -2413,6 +2406,7 @@ class Pregel(PregelProtocol[StateT, InputT, OutputT], Generic[StateT, InputT, Ou
                 nodes=self.nodes,
                 specs=self.channels,
                 output_keys=output_keys,
+                input_keys=self.input_channels,
                 stream_keys=self.stream_channels_asis,
                 interrupt_before=interrupt_before_,
                 interrupt_after=interrupt_after_,
@@ -2467,7 +2461,7 @@ class Pregel(PregelProtocol[StateT, InputT, OutputT], Generic[StateT, InputT, Ou
                 # Channel updates from step N are only visible in step N+1
                 # channels are guaranteed to be immutable for the duration of the step,
                 # with channel updates applied only at the transition between steps.
-                while loop.tick(input_keys=self.input_channels):
+                while loop.tick():
                     for task in loop.match_cached_writes():
                         loop.output_writes(task.id, task.writes, cached=True)
                     for _ in runner.tick(
@@ -2478,6 +2472,7 @@ class Pregel(PregelProtocol[StateT, InputT, OutputT], Generic[StateT, InputT, Ou
                     ):
                         # emit output
                         yield from output()
+                    loop.after_tick()
             # emit output
             yield from output()
             # handle exit
@@ -2647,7 +2642,6 @@ class Pregel(PregelProtocol[StateT, InputT, OutputT], Generic[StateT, InputT, Ou
                 config[CONF][CONFIG_KEY_CHECKPOINT_DURING] = checkpoint_during
             async with AsyncPregelLoop(
                 input,
-                input_model=self.input_model,
                 stream=StreamProtocol(stream.put_nowait, stream_modes),
                 config=config,
                 store=store,
@@ -2656,6 +2650,7 @@ class Pregel(PregelProtocol[StateT, InputT, OutputT], Generic[StateT, InputT, Ou
                 nodes=self.nodes,
                 specs=self.channels,
                 output_keys=output_keys,
+                input_keys=self.input_channels,
                 stream_keys=self.stream_channels_asis,
                 interrupt_before=interrupt_before_,
                 interrupt_after=interrupt_after_,
@@ -2701,7 +2696,7 @@ class Pregel(PregelProtocol[StateT, InputT, OutputT], Generic[StateT, InputT, Ou
                 # channel updates from step N are only visible in step N+1
                 # channels are guaranteed to be immutable for the duration of the step,
                 # with channel updates applied only at the transition between steps
-                while loop.tick(input_keys=self.input_channels):
+                while loop.tick():
                     for task in await loop.amatch_cached_writes():
                         loop.output_writes(task.id, task.writes, cached=True)
                     async for _ in runner.atick(
@@ -2713,6 +2708,7 @@ class Pregel(PregelProtocol[StateT, InputT, OutputT], Generic[StateT, InputT, Ou
                         # emit output
                         for o in output():
                             yield o
+                    loop.after_tick()
             # emit output
             for o in output():
                 yield o
