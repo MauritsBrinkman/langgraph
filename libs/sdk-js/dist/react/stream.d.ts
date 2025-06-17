@@ -126,6 +126,28 @@ export interface UseStreamOptions<StateType extends Record<string, unknown> = Re
      */
     onDebugEvent?: (data: DebugStreamEvent["data"]) => void;
     /**
+     * Callback that is called when the stream is stopped by the user.
+     * Provides a mutate function to update the stream state immediately
+     * without requiring a server roundtrip.
+     *
+     * @example
+     * ```typescript
+     * onStop: ({ mutate }) => {
+     *   mutate((prev) => ({
+     *     ...prev,
+     *     ui: prev.ui?.map(component =>
+     *       component.props.isLoading
+     *         ? { ...component, props: { ...component.props, stopped: true, isLoading: false }}
+     *         : component
+     *     )
+     *   }));
+     * }
+     * ```
+     */
+    onStop?: (options: {
+        mutate: (update: Partial<StateType> | ((prev: StateType) => Partial<StateType>)) => void;
+    }) => void;
+    /**
      * The ID of the thread to fetch history and current values from.
      */
     threadId?: string | null;

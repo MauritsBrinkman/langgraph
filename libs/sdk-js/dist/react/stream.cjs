@@ -334,6 +334,18 @@ function useStream(options) {
             };
         });
     })();
+    // Create a reusable mutate function for both onCustomEvent and onStop callbacks
+    const mutateStreamValues = (0, react_1.useCallback)((update) => {
+        setStreamValues((prev) => {
+            // should not happen
+            if (prev == null)
+                return prev;
+            return {
+                ...prev,
+                ...(typeof update === "function" ? update(prev) : update),
+            };
+        });
+    }, []);
     const stop = () => {
         if (abortRef.current != null)
             abortRef.current.abort();
@@ -343,6 +355,10 @@ function useStream(options) {
             if (runId)
                 client.runs.cancel(threadId, runId);
             runMetadataStorage.removeItem(`lg:stream:${threadId}`);
+        }
+        // Call onStop callback with mutate function
+        if (options.onStop) {
+            options.onStop({ mutate: mutateStreamValues });
         }
     };
     async function consumeStream(action) {
@@ -364,15 +380,7 @@ function useStream(options) {
                     options.onUpdateEvent?.(data);
                 if (event === "custom")
                     options.onCustomEvent?.(data, {
-                        mutate: (update) => setStreamValues((prev) => {
-                            // should not happen
-                            if (prev == null)
-                                return prev;
-                            return {
-                                ...prev,
-                                ...(typeof update === "function" ? update(prev) : update),
-                            };
-                        }),
+                        mutate: mutateStreamValues,
                     });
                 if (event === "metadata")
                     options.onMetadataEvent?.(data);
