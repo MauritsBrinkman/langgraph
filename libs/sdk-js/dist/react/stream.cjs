@@ -5,6 +5,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.useStream = void 0;
 const client_js_1 = require("../client.cjs");
 const react_1 = require("react");
+const react_dom_1 = require("react-dom");
 const messages_1 = require("@langchain/core/messages");
 class StreamError extends Error {
     constructor(data) {
@@ -336,16 +337,28 @@ function useStream(options) {
     })();
     // Create a reusable mutate function for both onCustomEvent and onStop callbacks
     const mutateStreamValues = (0, react_1.useCallback)((update) => {
-        setStreamValues((prev) => {
-            // should not happen
-            if (prev == null)
-                return prev;
-            return {
-                ...prev,
-                ...(typeof update === "function" ? update(prev) : update),
-            };
+        // Use React's flushSync to ensure UI mutations are atomic and don't race with streaming
+        (0, react_dom_1.flushSync)(() => {
+            setStreamValues((prevStreamValues) => {
+                // CRITICAL: UI mutations should only affect non-message properties
+                // Provide a SAFE state object that excludes messages to prevent corruption
+                const currentState = prevStreamValues ?? (options.initialValues ? { ...options.initialValues, ...historyValues } : historyValues);
+                // Create a safe state for mutations that EXCLUDES messages
+                const safeStateForMutation = { ...currentState };
+                delete safeStateForMutation[messagesKey];
+                // Apply the mutation to the safe state (messages are never touched)
+                const updatedSafeState = typeof update === "function"
+                    ? update(safeStateForMutation)
+                    : { ...safeStateForMutation, ...update };
+                // Return the final state with original messages preserved
+                return {
+                    ...currentState,
+                    ...updatedSafeState,
+                    [messagesKey]: currentState[messagesKey], // Always preserve current messages
+                };
+            });
         });
-    }, []);
+    }, [historyValues, options.initialValues, messagesKey]);
     const stop = () => {
         if (abortRef.current != null)
             abortRef.current.abort();
@@ -398,7 +411,7 @@ function useStream(options) {
                         continue;
                     }
                     setStreamValues((streamValues) => {
-                        const baseValues = options.initialValues ? { ...historyValues, ...options.initialValues } : historyValues;
+                        const baseValues = options.initialValues ? { ...options.initialValues, ...historyValues } : historyValues;
                         const values = { ...baseValues, ...streamValues };
                         // Assumption: we're concatenating the message
                         const messages = getMessages(values).slice();
@@ -412,12 +425,13 @@ function useStream(options) {
             }
             // TODO: stream created checkpoints to avoid an unnecessary network request
             const result = await run.onSuccess();
-            setStreamValues(null);
             if (streamError != null)
                 throw streamError;
             const lastHead = result.at(0);
             if (lastHead)
                 onFinish?.(lastHead, getCallbackMeta?.());
+            // Clear streamValues AFTER all callbacks are completed to prevent stale state access
+            setStreamValues(null);
         }
         catch (error) {
             if (!(error instanceof Error &&
@@ -465,7 +479,7 @@ function useStream(options) {
             // Assumption: we're setting the initial value
             // Used for instant feedback
             setStreamValues(() => {
-                const baseValues = options.initialValues ? { ...historyValues, ...options.initialValues } : historyValues;
+                const baseValues = options.initialValues ? { ...options.initialValues, ...historyValues } : historyValues;
                 if (submitOptions?.optimisticValues != null) {
                     return {
                         ...baseValues,
@@ -562,7 +576,7 @@ function useStream(options) {
         }
     }, [reconnectKey]);
     const error = streamError ?? historyError;
-    const values = streamValues ?? (options.initialValues ? { ...historyValues, ...options.initialValues } : historyValues);
+    const values = streamValues ?? (options.initialValues ? { ...options.initialValues, ...historyValues } : historyValues);
     return {
         get values() {
             trackStreamMode("values");
