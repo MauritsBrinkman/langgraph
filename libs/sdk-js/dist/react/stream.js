@@ -404,18 +404,33 @@ export function useStream(options) {
                     const [serialized] = data;
                     const messageId = messageManagerRef.current.add(serialized);
                     if (!messageId) {
-                        console.warn("Failed to add message to manager, no message ID found");
+                        console.warn("Failed to add message to manager, no message ID found", serialized);
                         continue;
                     }
                     setStreamValues((streamValues) => {
                         const baseValues = options.initialValues ? { ...options.initialValues, ...historyValues } : historyValues;
                         const values = { ...baseValues, ...streamValues };
-                        // Assumption: we're concatenating the message
+                        // Get current messages array
                         const messages = getMessages(values).slice();
                         const { chunk, index } = messageManagerRef.current.get(messageId, messages.length) ?? {};
                         if (!chunk || index == null)
                             return values;
-                        messages[index] = toMessageDict(chunk);
+                        const messageDict = toMessageDict(chunk);
+                        // SOLUTION: Handle temporary "run-" messages properly
+                        // If this is a non-"run-" message, check if it should replace a temporary "run-" message
+                        if (!messageId.startsWith('run-')) {
+                            // Look for a temporary "run-" message at the end that might be the same logical message
+                            const lastMessage = messages.at(-1);
+                            const lastMessageIsTemporary = lastMessage?.id?.startsWith('run-');
+                            if (lastMessageIsTemporary && lastMessage && index === messages.length) {
+                                // This new permanent message is likely replacing the temporary one
+                                // Replace the last temporary message instead of appending
+                                messages[messages.length - 1] = messageDict;
+                                return { ...values, [messagesKey]: messages };
+                            }
+                        }
+                        // Default behavior: set message at the determined index
+                        messages[index] = messageDict;
                         return { ...values, [messagesKey]: messages };
                     });
                 }
